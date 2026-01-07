@@ -1,8 +1,17 @@
 import streamlit as st
 import cv2
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from disease_pipeline import detect_disease
+from correlation import show_environment_correlation
+
+@st.cache_data
+def load_dataset():
+    return pd.read_csv("leaf_disease_severity_with_env.csv")
+
+df = load_dataset()
+available_diseases = sorted(df["disease"].unique())
 
 def colorize_clusters(label_img):
     label_img = label_img.astype(np.uint8)
@@ -62,3 +71,11 @@ if uploaded_file:
     )
 
     st.success(f"🌡 Disease Percentage: {percentage:.2f}%")
+
+    
+    selected_disease = st.selectbox(
+        "Select disease present in the leaf",
+        options=["-- Select --"] + available_diseases
+    )
+
+    show_environment_correlation(df, selected_disease)

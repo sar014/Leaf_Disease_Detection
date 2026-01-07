@@ -4,23 +4,6 @@ from sklearn.cluster import KMeans
 from grabcut_utils import remove_background_grabcut
 
 
-# ---------- Leaf extraction ----------
-def remove_background(img_bgr):
-    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-
-    lower_green = np.array([15, 20, 20])
-    upper_green = np.array([85, 255, 255])
-
-    mask = cv2.inRange(hsv, lower_green, upper_green)
-
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, 2)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, 10)
-
-    result = cv2.bitwise_and(img_bgr, img_bgr, mask=mask)
-    return result, mask
-
-
 # ---------- Disease segmentation ----------
 def segment_disease_regions(img_bgr, leaf_mask, k):
     lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2Lab)
@@ -29,7 +12,7 @@ def segment_disease_regions(img_bgr, leaf_mask, k):
     l, a, b = cv2.split(lab)
     leaf_pixels = leaf_mask > 0
 
-    # Method 1: Darkness
+    # Method 1: Darkness - Otsu
     masked_gray = gray.copy()
     masked_gray[~leaf_pixels] = 255
     _, mask1 = cv2.threshold(
@@ -49,7 +32,7 @@ def segment_disease_regions(img_bgr, leaf_mask, k):
     clusters = []
     for i in range(k):
         pix = (label_img == i) & leaf_pixels
-        if np.sum(pix) > 0:
+        if np.any(pix) > 0:
             clusters.append((i, np.mean(l[pix])))
 
     clusters.sort(key=lambda x: x[1])
@@ -88,19 +71,39 @@ def calculate_disease_percentage(disease_mask, leaf_mask):
 
 # ---------- Full pipeline ----------
 def detect_disease(img_bgr, k):
-    _, img = remove_background_grabcut(img_bgr)
-    img = cv2.resize(img, (256, 256))
+    img_bgr = cv2.resize(img_bgr, (256, 256))
 
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2Lab)
     l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(2.0, (8, 8))
-    img = cv2.cvtColor(
-        cv2.merge([clahe.apply(l), a, b]),
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l_enhanced = clahe.apply(l)
+
+    # Combines the three LAB channels back into one image, an image in LAB format with improved contrast
+    enhanced_img = cv2.cvtColor(
+        cv2.merge([l_enhanced, a, b]),
         cv2.COLOR_Lab2BGR
     )
 
-    _, leaf_mask = remove_background(img)
-    disease_mask, seg_img, clusters = segment_disease_regions(img, leaf_mask, k)
+    # ---------- Step 3: GrabCut background removal ----------
+    leaf_mask, leaf_img = remove_background_grabcut(enhanced_img)
+
+    # Ensure binary mask
+    leaf_mask = (leaf_mask > 0).astype(np.uint8) * 255
+
+    # ---------- Step 4: Disease segmentation ----------
+    disease_mask, seg_img, cluster_labels = segment_disease_regions(
+        leaf_img, leaf_mask, k
+    )
+
+    # ---------- Step 5: Disease percentage ----------
     percentage = calculate_disease_percentage(disease_mask, leaf_mask)
 
-    return img, leaf_mask, disease_mask, seg_img, clusters, percentage
+    return (
+        enhanced_img,
+        leaf_mask,
+        disease_mask,
+        seg_img, # seg_img → visualized disease-only image
+        cluster_labels, #label_img → K-Means cluster label map
+        percentage
+    )
